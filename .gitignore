@@ -2,3 +2,4 @@ datasets/*
 !datasets/README.md
 venv/
 __pycache__/
+.vscode/
