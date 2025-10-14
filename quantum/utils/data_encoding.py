@@ -74,7 +74,7 @@ def prepare_amplitude_encoding_circuit(data: np.ndarray, num_qubits: int) -> Qua
     state_prep = StatePreparation(state)
     qc.append(state_prep, qc.qubits[:-1])
 
-    # Set the last qubit to |1> if input data was all zeros
+    # Set the lsb to |1> if input data was all zeros
     if flag == 1:
         qc.x(qc.qubits[0])
 
