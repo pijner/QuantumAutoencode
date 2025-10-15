@@ -1,1 +1,97 @@
+import tensorflow as tf
+import tensorflow_datasets as tfds
+import matplotlib.pyplot as plt
+import numpy as np
 
+# --- Load MNIST ---
+(ds_train, ds_test), ds_info = tfds.load(
+    'mnist',
+    split=['train', 'test'],
+    shuffle_files=True,
+    as_supervised=True,
+    with_info=True,
+)
+
+# --- 1️⃣ Filter only digits 0 and 1 ---
+def filter_zeros_ones(image, label):
+    return tf.logical_or(tf.equal(label, 0), tf.equal(label, 1))
+
+ds_train_01 = ds_train.filter(filter_zeros_ones)
+ds_test_01 = ds_test.filter(filter_zeros_ones)
+
+# --- 2️⃣ Normalize and extract non-overlapping 8×8 patches ---
+def preprocess_and_extract_patches(image, label):
+    image = tf.cast(image, tf.float32) / 255.0  # normalize
+    image = tf.expand_dims(image, axis=0)  # (1,28,28,1)
+
+    patch_size = 8
+    patches_flat = tf.image.extract_patches(
+        images=image,
+        sizes=[1, patch_size, patch_size, 1],
+        strides=[1, patch_size, patch_size, 1],
+        rates=[1, 1, 1, 1],
+        padding='VALID'
+    )  # shape (1, 3, 3, 64)
+
+    patches_flat = tf.squeeze(patches_flat, axis=0)  # remove batch
+    num_y = tf.shape(patches_flat)[0]
+    num_x = tf.shape(patches_flat)[1]
+
+    # Reshape flat 64-length patches into (8,8,1)
+    patches = tf.reshape(patches_flat, (num_y, num_x, patch_size, patch_size))
+    patches = tf.reshape(patches, (-1, patch_size, patch_size, 1))  # 9 patches total
+
+    return patches, label
+
+# --- Apply preprocessing ---
+ds_train_patches = ds_train_01.map(preprocess_and_extract_patches, num_parallel_calls=tf.data.AUTOTUNE)
+ds_test_patches = ds_test_01.map(preprocess_and_extract_patches, num_parallel_calls=tf.data.AUTOTUNE)
+
+# --- 3️⃣ Visualization of multiple 8×8 patches ---
+for patches, label in ds_train_patches.take(2):  # take 2 examples
+    patches_np = patches.numpy()
+    lbl = label.numpy()
+    num_patches = len(patches_np)
+
+    print(f"Label: {lbl} → {num_patches} patches extracted")
+    fig, axes = plt.subplots(1, num_patches + 1, figsize=(12, 3))
+
+    # Get the original image (for comparison)
+    for img, lbl_orig in ds_train_01.take(1):
+        orig_image = tf.cast(img, tf.float32) / 255.0
+        orig_image = orig_image.numpy().squeeze()
+
+    axes[0].imshow(orig_image, cmap="gray")
+    axes[0].set_title("Original 28×28")
+    axes[0].axis("off")
+
+    # Display all 8×8 patches
+    for i, patch in enumerate(patches_np):
+        axes[i + 1].imshow(patch.squeeze(), cmap="gray")
+        axes[i + 1].set_title(f"Patch {i+1}")
+        axes[i + 1].axis("off")
+
+    plt.suptitle(f"Label: {lbl} — 8×8 patches (non-overlapping)")
+    plt.tight_layout()
+    plt.show()
+
+# --- 4️⃣ Unit test for correctness ---
+def test_patch_extraction():
+    patch_size = 8
+    image = tf.reshape(tf.range(28*28, dtype=tf.float32), (28, 28, 1))
+    label = tf.constant(0)
+
+    patches, lbl = preprocess_and_extract_patches(image, label)
+
+    expected_num_patches = (28 // patch_size) ** 2  # 3×3 = 9
+    tf.debugging.assert_equal(tf.shape(patches)[0], expected_num_patches)
+    tf.debugging.assert_equal(tf.shape(patches)[1:], [patch_size, patch_size, 1])
+
+    # Check top-left patch matches original top-left
+    top_left_patch = tf.squeeze(patches[0])
+    expected_patch = tf.squeeze(image[:patch_size, :patch_size, :] / 255.0)
+    tf.debugging.assert_near(top_left_patch, expected_patch, atol=1e-6)
+
+    print("✅ Patch extraction test passed (9 non-overlapping 8×8 patches)")
+
+test_patch_extraction()
