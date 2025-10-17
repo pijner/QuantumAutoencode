@@ -23,11 +23,10 @@ def get_mnist_zeros_ones_datasets():
     return ds_train_01, ds_test_01
 
 
-def preprocess_and_extract_patches(image, label):
+def preprocess_and_extract_patches(image, label, patch_size=8):
     image = tf.cast(image, tf.float32) / 255.0  # normalize
     image = tf.expand_dims(image, axis=0)  # (1,28,28,1)
 
-    patch_size = 8
     patches_flat = tf.image.extract_patches(
         images=image,
         sizes=[1, patch_size, patch_size, 1],
