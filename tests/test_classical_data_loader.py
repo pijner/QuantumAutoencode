@@ -4,10 +4,9 @@ from classical.utils.data_loader import preprocess_and_extract_patches
 
 def test_patch_extraction():
     patch_size = 8
-    image = tf.reshape(tf.range(28*28, dtype=tf.float32), (28, 28, 1))
-    label = tf.constant(0)
+    image = tf.reshape(tf.range(28*28, dtype=tf.float32), (28, 28, 1))    
 
-    patches, lbl = preprocess_and_extract_patches(image, label)
+    patches = preprocess_and_extract_patches(image)
 
     expected_num_patches = (28 // patch_size) ** 2  # 3×3 = 9
     tf.debugging.assert_equal(tf.shape(patches)[0], expected_num_patches)

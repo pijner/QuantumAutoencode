@@ -1,5 +1,7 @@
+import numpy as np
 import tensorflow as tf
 import tensorflow_datasets as tfds
+from tqdm import tqdm
 
 
 def load_mnist_datasets():
@@ -23,9 +25,9 @@ def get_mnist_zeros_ones_datasets():
     return ds_train_01, ds_test_01
 
 
-def preprocess_and_extract_patches(image, label, patch_size=8):
-    image = tf.cast(image, tf.float32) / 255.0  # normalize
-    image = tf.expand_dims(image, axis=0)  # (1,28,28,1)
+def preprocess_and_extract_patches(image, patch_size: int = 8):
+    image = tf.cast(image, tf.float32) / 255.0
+    image = tf.expand_dims(image, axis=0)
 
     patches_flat = tf.image.extract_patches(
         images=image,
@@ -33,14 +35,24 @@ def preprocess_and_extract_patches(image, label, patch_size=8):
         strides=[1, patch_size, patch_size, 1],
         rates=[1, 1, 1, 1],
         padding="VALID",
-    )  # shape (1, 3, 3, 64)
+    )
 
-    patches_flat = tf.squeeze(patches_flat, axis=0)  # remove batch
+    patches_flat = tf.squeeze(patches_flat, axis=0)
     num_y = tf.shape(patches_flat)[0]
     num_x = tf.shape(patches_flat)[1]
 
     # Reshape flat 64-length patches into (8,8,1)
     patches = tf.reshape(patches_flat, (num_y, num_x, patch_size, patch_size))
-    patches = tf.reshape(patches, (-1, patch_size, patch_size, 1))  # 9 patches total
+    patches = tf.reshape(patches, (-1, patch_size, patch_size, 1))
 
-    return patches, label
+    return patches
+
+
+def get_image_patches_arrays(dataset: tf.data.Dataset, patch_size: int = 8):
+    patched_dataset = []
+    for image, _ in tqdm(dataset):
+        patches = preprocess_and_extract_patches(image, patch_size=patch_size)
+        patched_dataset.append(patches.numpy().reshape(-1, (patch_size * patch_size)))
+
+    # reshape to (num_images * num_patches, patch_size*patch_size)
+    return np.array(patched_dataset).reshape(-1, patch_size * patch_size)
