@@ -55,4 +55,13 @@ def get_image_patches_arrays(dataset: tf.data.Dataset, patch_size: int = 8):
         patched_dataset.append(patches.numpy().reshape(-1, (patch_size * patch_size)))
 
     # reshape to (num_images * num_patches, patch_size*patch_size)
-    return np.array(patched_dataset).reshape(-1, patch_size * patch_size)
+    patched_dataset = np.array(patched_dataset, dtype=np.float64).reshape(-1, patch_size * patch_size)
+
+    # normalize patches by dividing by sum of squares (per patch)
+    norms = np.linalg.norm(patched_dataset, axis=1, keepdims=True)
+    patched_dataset = patched_dataset / norms
+
+    # drop any NaN patches resulting from zero division
+    patched_dataset = patched_dataset[~np.isnan(patched_dataset).any(axis=1)]
+
+    return patched_dataset
