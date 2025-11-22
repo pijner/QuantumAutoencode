@@ -28,6 +28,7 @@ class QAE:
         self.training_history = []
         self.training_time = 0
         self.optimized_params = None
+        self.num_sampled_trained_on = None
 
         # initialize circuits
         self.init_circuits()
@@ -97,6 +98,51 @@ class QAE:
 
         return self.model
 
+    def _decode_amplitudes(self, amplitudes: np.ndarray) -> np.ndarray:
+        """
+        Decode amplitudes from the quantum autoencoder back to normalized image values.
+
+        Args:
+            amplitudes: Output from the predict function (probability values from statevector)
+
+        Returns:
+            Normalized image values ready for comparison with original inputs
+        """
+        # Convert probabilities back to amplitudes (square root)
+        decoded_amplitudes = np.sqrt(np.abs(amplitudes))
+
+        # For batch processing, handle both single images and batches
+        if decoded_amplitudes.ndim == 1:
+            # Single image
+            # Extract only the relevant portion (first 2^(num_latent + num_trash) elements)
+            num_features = 2 ** (self.num_latent_qubits + self.num_trash_qubits)
+            decoded_image = decoded_amplitudes[:num_features]
+
+            # Normalize to unit vector (L2 norm = 1) to match original preprocessing
+            norm = np.sqrt(np.sum(decoded_image**2))
+            if norm > 0:
+                decoded_image = decoded_image / norm
+
+            return decoded_image
+        else:
+            # Batch of images
+            num_features = 2 ** (self.num_latent_qubits + self.num_trash_qubits)
+            batch_size = decoded_amplitudes.shape[0]
+            decoded_images = np.zeros((batch_size, num_features))
+
+            for i in range(batch_size):
+                # Extract relevant portion for each image
+                decoded_image = decoded_amplitudes[i, :num_features]
+
+                # Normalize each image to unit vector
+                norm = np.sqrt(np.sum(decoded_image**2))
+                if norm > 0:
+                    decoded_images[i] = decoded_image / norm
+                else:
+                    decoded_images[i] = decoded_image
+
+            return decoded_images
+
     def loss_wrapper(self, X: np.ndarray):
         def loss(params_values):
             probabilities = self.model.forward(X, params_values)
@@ -119,10 +165,22 @@ class QAE:
         end_time = time()
 
         self.training_time = end_time - start_time
+        self.num_sampled_trained_on = train_images.shape[0]
 
         return self.optimized_params
 
-    def predict(self, X: np.ndarray, params: list[float] = None):
+    def predict(self, X: np.ndarray, params: list[float] = None, return_raw: bool = False):
+        """
+        Predict reconstructed images using the trained quantum autoencoder.
+
+        Args:
+            X: Input images (normalized to unit vectors)
+            params: Optional parameters to use (defaults to optimized parameters from training)
+            return_raw: If True, return raw probability values. If False, return decoded amplitudes.
+
+        Returns:
+            Reconstructed images as normalized amplitude values (or raw probabilities if return_raw=True)
+        """
         if params is None:
             params = self.optimized_params.x
         else:
@@ -152,4 +210,28 @@ class QAE:
             output_qc = predict_circuit.assign_parameters(param_values)
             predict_values.append(Statevector(output_qc).data)
 
-        return np.array(predict_values).real ** 2
+        raw_probabilities = np.array(predict_values).real ** 2
+
+        if return_raw:
+            return raw_probabilities
+        else:
+            return self._decode_amplitudes(raw_probabilities)
+
+    def calculate_metrics(self, original_data: np.ndarray, predicted_data: np.ndarray):
+        """
+        Reconstruct images and calculate reconstruction metrics.
+
+        Args:
+            X: Input images (normalized to unit vectors)
+            params: Optional parameters to use (defaults to optimized parameters from training)
+
+        Returns:
+            tuple: (reconstructed_images, mse_errors, reconstruction_fidelities)
+        """
+
+        mse_errors = np.mean((original_data - predicted_data) ** 2, axis=1)
+
+        # Calculate fidelity (cosine similarity for normalized vectors)
+        reconstruction_fidelities = np.sum(original_data * predicted_data, axis=1)
+
+        return mse_errors, reconstruction_fidelities
