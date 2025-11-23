@@ -1,11 +1,16 @@
 import logging
+import time
 import numpy as np
 
-from classical.utils.data_loader import get_image_patches_arrays, get_mnist_zeros_ones_datasets
+from classical.utils.data_loader import (
+    get_fashion_mnist_datasets,
+    get_image_patches_arrays,
+    get_mnist_zeros_ones_datasets,
+)
 from quantum.circuits.qae import QAE
 
 
-class MNIST01QAETrainer:
+class QAETrainer:
     def __init__(self, patch_size: int = 8, num_trash_qubits: int = 2):
         self.patch_size = patch_size
 
@@ -22,23 +27,18 @@ class MNIST01QAETrainer:
         self.qae_model = QAE(num_latent_qubits=self.num_latent_qubits, num_trash_qubits=self.num_trash_qubits)
 
     def get_train_test_sets(self):
-        if self.train_set is None or self.test_set is None:
-            self.train_set, self.test_set = get_mnist_zeros_ones_datasets()
-
-        return self.train_set, self.test_set
+        raise NotImplementedError("Subclasses must implement get_train_test_sets method.")
 
     def preprocess(self, keep_unique: bool = True, num_train: int = None, num_test: int = None, random_seed: int = 42):
-        mnist_01_train, mnist_01_test = self.get_train_test_sets()
+        train_ds, test_ds = self.get_train_test_sets()
 
         train_data = (
-            get_image_patches_arrays(mnist_01_train, patch_size=self.patch_size)
+            get_image_patches_arrays(train_ds, patch_size=self.patch_size)
             if num_train is None or num_train > 0
             else None
         )
         test_data = (
-            get_image_patches_arrays(mnist_01_test, patch_size=self.patch_size)
-            if num_test is None or num_test > 0
-            else None
+            get_image_patches_arrays(test_ds, patch_size=self.patch_size) if num_test is None or num_test > 0 else None
         )
 
         # only keep unique patches
@@ -117,7 +117,10 @@ class MNIST01QAETrainer:
 
         logging.info(f"Test data shape: {test_data.shape}")
 
+        t0 = time.time()
         predictions = self.qae_model.predict(test_data, params)
+        t1 = time.time()
+        logging.info(f"Prediction completed in {t1 - t0:.2f} seconds.")
         predictions = np.reshape(predictions, (-1, self.patch_size, self.patch_size))
         test_data = np.reshape(test_data, (-1, self.patch_size, self.patch_size))
 
@@ -151,3 +154,29 @@ class MNIST01QAETrainer:
         )
 
         return original_data, reconstructed_data, mse_errors, fidelities
+
+
+class MNIST01QAETrainer(QAETrainer):
+    def __init__(self, patch_size: int = 8, num_trash_qubits: int = 2):
+        super().__init__(patch_size=patch_size, num_trash_qubits=num_trash_qubits)
+        self.train_set = None
+        self.test_set = None
+
+    def get_train_test_sets(self):
+        if self.train_set is None or self.test_set is None:
+            self.train_set, self.test_set = get_mnist_zeros_ones_datasets()
+
+        return self.train_set, self.test_set
+
+
+class FashionMNISTQAETrainer(QAETrainer):
+    def __init__(self, patch_size: int = 8, num_trash_qubits: int = 2):
+        super().__init__(patch_size=patch_size, num_trash_qubits=num_trash_qubits)
+        self.train_set = None
+        self.test_set = None
+
+    def get_train_test_sets(self):
+        if self.train_set is None or self.test_set is None:
+            self.train_set, self.test_set = get_fashion_mnist_datasets()
+
+        return self.train_set, self.test_set
