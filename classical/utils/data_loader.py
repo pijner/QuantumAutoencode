@@ -25,6 +25,14 @@ def get_mnist_zeros_ones_datasets():
     return ds_train_01, ds_test_01
 
 
+def get_fashion_mnist_datasets():
+    (ds_train, ds_test) = tfds.load(
+        "fashion_mnist", split=["train", "test"], shuffle_files=True, as_supervised=True, with_info=False
+    )
+
+    return ds_train, ds_test
+
+
 def preprocess_and_extract_patches(image, patch_size: int = 8):
     image = tf.cast(image, tf.float32) / 255.0
     image = tf.expand_dims(image, axis=0)
@@ -48,7 +56,29 @@ def preprocess_and_extract_patches(image, patch_size: int = 8):
     return patches
 
 
-def get_image_patches_arrays(dataset: tf.data.Dataset, patch_size: int = 8):
+def reconstruct_from_patches(patches: np.ndarray, image_height: int, image_width: int, patch_size=8):
+    """
+    patches: numpy array of shape (num_patches, patch_size, patch_size, 1)
+    image_height, image_width: original image dimensions
+    """
+    num_y = image_height // patch_size
+    num_x = image_width // patch_size
+
+    # reshape patches back to grid
+    grid = patches.reshape(num_y, num_x, patch_size, patch_size, 1)
+
+    # initialize output image
+    reconstructed = np.zeros((image_height, image_width, 1), dtype=patches.dtype)
+
+    # fill the image block-by-block
+    for i in range(num_y):
+        for j in range(num_x):
+            reconstructed[i * patch_size : (i + 1) * patch_size, j * patch_size : (j + 1) * patch_size, :] = grid[i, j]
+
+    return reconstructed
+
+
+def get_image_patches_arrays(dataset: tf.data.Dataset, patch_size: int = 8, dropna: bool = True) -> np.ndarray:
     patched_dataset = []
     for image, _ in tqdm(dataset):
         patches = preprocess_and_extract_patches(image, patch_size=patch_size)
@@ -62,6 +92,7 @@ def get_image_patches_arrays(dataset: tf.data.Dataset, patch_size: int = 8):
     patched_dataset = patched_dataset / norms
 
     # drop any NaN patches resulting from zero division
-    patched_dataset = patched_dataset[~np.isnan(patched_dataset).any(axis=1)]
+    if dropna:
+        patched_dataset = patched_dataset[~np.isnan(patched_dataset).any(axis=1)]
 
     return patched_dataset
