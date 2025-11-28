@@ -1,17 +1,24 @@
-import numpy as np
-import logging
-import pickle
+"""Quantum autoencoder implementation using Qiskit.
+
+This module provides a quantum autoencoder (QAE) implementation that uses
+quantum circuits to compress and reconstruct quantum states representing
+image data.
+"""
+
 import json
+import logging
 import os
-
-from time import time
+import pickle
 from datetime import datetime
+from time import time
+from typing import Optional, Dict, Any, List, Tuple
 
+import numpy as np
+from numpy.typing import NDArray
 from qiskit import QuantumCircuit, QuantumRegister, ClassicalRegister
 from qiskit.circuit.library import RealAmplitudes
 from qiskit.primitives import StatevectorSampler
 from qiskit.quantum_info import Statevector
-
 from qiskit_machine_learning.circuit.library import RawFeatureVector
 from qiskit_machine_learning.neural_networks import SamplerQNN
 from qiskit_machine_learning.optimizers import COBYLA
@@ -19,39 +26,112 @@ from tqdm import tqdm
 
 
 class QAE:
-    def __init__(self, num_latent_qubits: int, num_trash_qubits: int):
+    """Quantum autoencoder for quantum state compression and reconstruction.
+
+    This class implements a quantum autoencoder using a swap test to measure
+    the fidelity between encoded and decoded quantum states. The autoencoder
+    compresses quantum states by discarding trash qubits and reconstructs
+    the original state from the latent representation.
+
+    Parameters
+    ----------
+    num_latent_qubits : int
+        Number of qubits in the latent (compressed) representation
+    num_trash_qubits : int
+        Number of qubits to discard during compression
+
+    Attributes
+    ----------
+    num_latent_qubits : int
+        Number of qubits in the latent space
+    num_trash_qubits : int
+        Number of trash qubits
+    feature_encoder : RawFeatureVector
+        Quantum circuit for encoding classical data into quantum states
+    model : SamplerQNN or None
+        The quantum neural network model
+    autoencoder_circuit : QuantumCircuit or None
+        The autoencoder circuit with swap test
+    quantum_circuit : QuantumCircuit or None
+        Complete quantum circuit combining encoder and autoencoder
+    training_history : List[float]
+        Loss values recorded during training
+    training_time : float
+        Total training time in seconds
+    optimized_params : Any or None
+        Optimized circuit parameters from training
+    num_sampled_trained_on : int or None
+        Number of samples used in training
+    """
+
+    def __init__(self, num_latent_qubits: int, num_trash_qubits: int) -> None:
         self.num_latent_qubits = num_latent_qubits
         self.num_trash_qubits = num_trash_qubits
 
         self.feature_encoder = RawFeatureVector(2 ** (num_latent_qubits + num_trash_qubits))
 
-        self.model = None
-        self.autoencoder_circuit = None
-        self.quantum_circuit = None
+        self.model: Optional[SamplerQNN] = None
+        self.autoencoder_circuit: Optional[QuantumCircuit] = None
+        self.quantum_circuit: Optional[QuantumCircuit] = None
 
-        self.training_history = []
-        self.training_time = 0
-        self.optimized_params = None
-        self.num_sampled_trained_on = None
+        self.training_history: List[float] = []
+        self.training_time: float = 0
+        self.optimized_params: Any = None
+        self.num_sampled_trained_on: Optional[int] = None
 
         # initialize circuits
         self.init_circuits()
 
-    def reset_training_params(self):
+    def reset_training_params(self) -> None:
+        """Reset all training-related parameters to their initial states.
+
+        Clears training history, resets training time to zero, and removes
+        optimized parameters. Useful when retraining the model.
+        """
         self.training_history = []
         self.training_time = 0
         self.optimized_params = None
 
     @staticmethod
-    def ansatz(num_qubits):
+    def ansatz(num_qubits: int) -> RealAmplitudes:
+        """Create a parameterized ansatz circuit.
+
+        Uses the RealAmplitudes variational form with 5 repetitions.
+
+        Parameters
+        ----------
+        num_qubits : int
+            Number of qubits for the ansatz circuit
+
+        Returns
+        -------
+        RealAmplitudes
+            Parameterized quantum circuit ansatz
+        """
         return RealAmplitudes(num_qubits, reps=5)
 
-    def init_circuits(self):
+    def init_circuits(self) -> None:
+        """Initialize all quantum circuits and the QNN model.
+
+        Creates the autoencoder circuit with swap test, the complete quantum
+        circuit, and the SamplerQNN model.
+        """
         self.autoencoder_circuit = self._init_autoencoder_circuit()
         self.quantum_circuit = self._init_quantum_circuit()
         self.model = self._init_model()
 
-    def _init_autoencoder_circuit(self):
+    def _init_autoencoder_circuit(self) -> QuantumCircuit:
+        """Initialize the autoencoder circuit with swap test.
+
+        Creates a quantum circuit that applies a variational ansatz followed
+        by a swap test to measure the fidelity between encoded and reference
+        trash qubits.
+
+        Returns
+        -------
+        QuantumCircuit
+            Autoencoder circuit with swap test measurement
+        """
         self.autoencoder_circuit = QuantumCircuit(
             QuantumRegister(self.num_latent_qubits + 2 * self.num_trash_qubits + 1, "q"),
             ClassicalRegister(1, "c"),
@@ -78,19 +158,61 @@ class QAE:
 
         return self.autoencoder_circuit
 
-    def _init_quantum_circuit(self):
+    def _init_quantum_circuit(self) -> QuantumCircuit:
+        """Initialize the complete quantum circuit.
+
+        Combines the feature encoder and autoencoder circuit into a single
+        quantum circuit for training.
+
+        Returns
+        -------
+        QuantumCircuit
+            Complete quantum circuit with feature encoding and autoencoding
+        """
+        assert self.autoencoder_circuit is not None, (
+            "Autoencoder circuit must be initialized before initializing the quantum circuit."
+        )
+
         self.quantum_circuit = QuantumCircuit(self.num_latent_qubits + 2 * self.num_trash_qubits + 1, 1)
-        self.quantum_circuit = self.quantum_circuit.compose(
-            self.feature_encoder, range(self.num_latent_qubits + self.num_trash_qubits)
+        self.quantum_circuit.compose(
+            self.feature_encoder, range(self.num_latent_qubits + self.num_trash_qubits), inplace=True
         )
         self.quantum_circuit = self.quantum_circuit.compose(self.autoencoder_circuit)
 
         return self.quantum_circuit
 
-    def _init_model(self, output_shape: int = 2, sampler=None):
+    def _init_model(self, output_shape: int = 2, sampler: Any = None) -> SamplerQNN:
+        """Initialize the quantum neural network model.
+
+        Creates a SamplerQNN with the quantum circuit, distinguishing between
+        input parameters (feature encoding) and weight parameters (trainable).
+
+        Parameters
+        ----------
+        output_shape : int, optional
+            Shape of the output (2 for binary classification), by default 2
+        sampler : Any, optional
+            Qiskit sampler for circuit execution. If None, uses StatevectorSampler,
+            by default None
+
+        Returns
+        -------
+        SamplerQNN
+            Initialized quantum neural network model
+        """
         if sampler is None:
             logging.info("No sampler provided, using StatevectorSampler by default.")
             sampler = StatevectorSampler()
+        
+        assert self.quantum_circuit is not None, (
+            "Quantum circuit must be initialized before initializing the model."
+        )
+        assert self.feature_encoder is not None, (
+            "Feature encoder must be initialized before initializing the model."
+        )
+        assert self.autoencoder_circuit is not None, (
+            "Autoencoder circuit must be initialized before initializing the model."
+        )
 
         self.model = SamplerQNN(
             circuit=self.quantum_circuit,
@@ -102,14 +224,17 @@ class QAE:
 
         return self.model
 
-    def _decode_amplitudes(self, amplitudes: np.ndarray) -> np.ndarray:
-        """
-        Decode amplitudes from the quantum autoencoder back to normalized image values.
+    def _decode_amplitudes(self, amplitudes: NDArray) -> NDArray:
+        """Decode amplitudes from the quantum autoencoder back to normalized image values.
 
-        Args:
-            amplitudes: Output from the predict function (probability values from statevector)
+        Parameters
+        ----------
+        amplitudes : NDArray
+            Output from the predict function (probability values from statevector)
 
-        Returns:
+        Returns
+        -------
+        NDArray
             Normalized image values ready for comparison with original inputs
         """
         # Convert probabilities back to amplitudes (square root)
@@ -147,8 +272,25 @@ class QAE:
 
             return decoded_images
 
-    def loss_wrapper(self, X: np.ndarray):
-        def loss(params_values):
+    def loss_wrapper(self, X: NDArray):
+        """Create a loss function for optimization.
+
+        Returns a loss function that computes the average probability of measuring
+        the auxiliary qubit in state |1⟩, which corresponds to low fidelity.
+        Training minimizes this to maximize reconstruction fidelity.
+
+        Parameters
+        ----------
+        X : NDArray
+            Training data (normalized image vectors)
+
+        Returns
+        -------
+        callable
+            Loss function that takes parameter values and returns a scalar cost
+        """
+
+        def loss(params_values: NDArray) -> float:
             probabilities = self.model.forward(X, params_values)
             cost = np.sum(probabilities[:, 1]) / X.shape[0]
 
@@ -158,7 +300,26 @@ class QAE:
 
         return loss
 
-    def fit(self, train_images: np.ndarray, initial_param: list[float], maxiter: int = 100):
+    def fit(self, train_images: NDArray, initial_param: List[float], maxiter: int = 100) -> Any:
+        """Train the quantum autoencoder.
+
+        Optimizes circuit parameters to minimize the loss function (maximize
+        reconstruction fidelity) using the COBYLA optimizer.
+
+        Parameters
+        ----------
+        train_images : NDArray
+            Training images as normalized vectors with shape (num_samples, num_features)
+        initial_param : List[float]
+            Initial parameter values for the variational circuit
+        maxiter : int, optional
+            Maximum number of optimization iterations, by default 100
+
+        Returns
+        -------
+        Any
+            Optimization result object containing optimized parameters
+        """
         # reset training history
         self.reset_training_params()
 
@@ -173,17 +334,25 @@ class QAE:
 
         return self.optimized_params
 
-    def predict(self, X: np.ndarray, params: list[float] = None, return_raw: bool = False):
-        """
-        Predict reconstructed images using the trained quantum autoencoder.
+    def predict(self, X: NDArray, params: Optional[List[float]] = None, return_raw: bool = False) -> NDArray:
+        """Predict reconstructed images using the trained quantum autoencoder.
 
-        Args:
-            X: Input images (normalized to unit vectors)
-            params: Optional parameters to use (defaults to optimized parameters from training)
-            return_raw: If True, return raw probability values. If False, return decoded amplitudes.
+        Parameters
+        ----------
+        X : NDArray
+            Input images (normalized to unit vectors) with shape (num_samples, num_features)
+        params : List[float] or None, optional
+            Parameters to use for prediction. If None, uses optimized parameters
+            from training, by default None
+        return_raw : bool, optional
+            If True, return raw probability values. If False, return decoded
+            amplitudes, by default False
 
-        Returns:
-            Reconstructed images as normalized amplitude values (or raw probabilities if return_raw=True)
+        Returns
+        -------
+        NDArray
+            Reconstructed images as normalized amplitude values (or raw probabilities
+            if return_raw=True)
         """
         if params is None:
             params = self.optimized_params.x
@@ -221,16 +390,27 @@ class QAE:
         else:
             return self._decode_amplitudes(raw_probabilities)
 
-    def calculate_metrics(self, original_data: np.ndarray, predicted_data: np.ndarray):
-        """
-        Reconstruct images and calculate reconstruction metrics.
+    def calculate_metrics(self, original_data: NDArray, predicted_data: NDArray) -> Tuple[NDArray, NDArray]:
+        """Calculate reconstruction metrics between original and predicted data.
 
-        Args:
-            X: Input images (normalized to unit vectors)
-            params: Optional parameters to use (defaults to optimized parameters from training)
+        Computes mean squared error (MSE) and reconstruction fidelity (cosine
+        similarity) between original and predicted images.
 
-        Returns:
-            tuple: (reconstructed_images, mse_errors, reconstruction_fidelities)
+        Parameters
+        ----------
+        original_data : NDArray
+            Original input images (normalized to unit vectors)
+        predicted_data : NDArray
+            Predicted/reconstructed images from the autoencoder
+
+        Returns
+        -------
+        Tuple[NDArray, NDArray]
+            A tuple containing:
+            - mse_errors : NDArray
+                Mean squared error per sample
+            - reconstruction_fidelities : NDArray
+                Fidelity (cosine similarity) per sample
         """
 
         mse_errors = np.mean((original_data - predicted_data) ** 2, axis=1)
@@ -240,13 +420,28 @@ class QAE:
 
         return mse_errors, reconstruction_fidelities
 
-    def save_model(self, filepath: str, metadata: dict = None):
-        """
-        Save the quantum autoencoder model parameters and metadata to file.
+    def save_model(self, filepath: str, metadata: Optional[Dict[str, Any]] = None) -> Tuple[str, str]:
+        """Save the quantum autoencoder model parameters and metadata to file.
 
-        Args:
-            filepath: Path to save the model (without extension)
-            metadata: Optional dictionary with additional metadata to save
+        Saves model state to both JSON (for readability) and pickle (for exact
+        object reconstruction) formats.
+
+        Parameters
+        ----------
+        filepath : str
+            Path to save the model (without extension)
+        metadata : Dict[str, Any] or None, optional
+            Additional metadata to save with the model, by default None
+
+        Returns
+        -------
+        Tuple[str, str]
+            Paths to the saved JSON and pickle files
+
+        Raises
+        ------
+        ValueError
+            If the model has not been trained yet
         """
         if self.optimized_params is None:
             raise ValueError("Model has not been trained yet. Cannot save untrained model.")
@@ -284,16 +479,28 @@ class QAE:
         logging.info(f"Model saved to {json_filepath} and {pickle_filepath}")
         return json_filepath, pickle_filepath
 
-    def load_model(self, filepath: str, use_pickle: bool = False):
-        """
-        Load quantum autoencoder model parameters from file.
+    def load_model(self, filepath: str, use_pickle: bool = False) -> Dict[str, Any]:
+        """Load quantum autoencoder model parameters from file.
 
-        Args:
-            filepath: Path to the saved model (without extension)
-            use_pickle: If True, load from pickle file for exact object reconstruction
+        Parameters
+        ----------
+        filepath : str
+            Path to the saved model (without extension)
+        use_pickle : bool, optional
+            If True, load from pickle file for exact object reconstruction.
+            Otherwise, load from JSON file, by default False
 
-        Returns:
-            dict: Metadata that was saved with the model
+        Returns
+        -------
+        Dict[str, Any]
+            Metadata that was saved with the model
+
+        Raises
+        ------
+        FileNotFoundError
+            If the specified model file is not found
+        ValueError
+            If model architecture does not match the saved model
         """
         if use_pickle:
             pickle_filepath = f"{filepath}.pkl"
@@ -354,16 +561,33 @@ class QAE:
         return model_state.get("metadata", {})
 
     @classmethod
-    def load_from_file(cls, filepath: str, use_pickle: bool = False):
-        """
-        Class method to create a new QAE instance and load model from file.
+    def load_from_file(cls, filepath: str, use_pickle: bool = False) -> Tuple["QAE", Dict[str, Any]]:
+        """Create a new QAE instance and load model from file.
 
-        Args:
-            filepath: Path to the saved model (without extension)
-            use_pickle: If True, load from pickle file for exact object reconstruction
+        Class method that instantiates a QAE with the correct architecture
+        from saved model files and loads the trained parameters.
 
-        Returns:
-            QAE: New QAE instance with loaded model parameters
+        Parameters
+        ----------
+        filepath : str
+            Path to the saved model (without extension)
+        use_pickle : bool, optional
+            If True, load from pickle file for exact object reconstruction,
+            by default False
+
+        Returns
+        -------
+        Tuple[QAE, Dict[str, Any]]
+            A tuple containing:
+            - qae : QAE
+                New QAE instance with loaded model parameters
+            - metadata : Dict[str, Any]
+                Metadata that was saved with the model
+
+        Raises
+        ------
+        FileNotFoundError
+            If the specified model file is not found
         """
         # First load the model state to get architecture parameters
         if use_pickle:
@@ -390,12 +614,19 @@ class QAE:
 
         return qae, metadata
 
-    def get_model_info(self):
-        """
-        Get comprehensive information about the current model state.
+    def get_model_info(self) -> Dict[str, Any]:
+        """Get comprehensive information about the current model state.
 
-        Returns:
-            dict: Model information including architecture, training status, and performance
+        Returns
+        -------
+        Dict[str, Any]
+            Dictionary containing model information including:
+            - architecture : dict
+                Qubit counts and circuit parameters
+            - training_status : dict
+                Training state and loss history
+            - optimizer_result : dict
+                Optimization results (if trained)
         """
         info = {
             "architecture": {
@@ -424,15 +655,21 @@ class QAE:
         return info
 
     @staticmethod
-    def list_saved_models(directory: str = "."):
-        """
-        List all saved QAE models in a directory.
+    def list_saved_models(directory: str = ".") -> List[str]:
+        """List all saved QAE models in a directory.
 
-        Args:
-            directory: Directory to search for saved models
+        Searches for valid QAE model JSON files in the specified directory
+        and returns their base paths.
 
-        Returns:
-            list: List of model file paths (without extensions)
+        Parameters
+        ----------
+        directory : str, optional
+            Directory to search for saved models, by default "."
+
+        Returns
+        -------
+        List[str]
+            Sorted list of model file paths (without extensions)
         """
         if not os.path.exists(directory):
             return []

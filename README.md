@@ -61,6 +61,15 @@ QuantumAutoencode/
 └── README.md           # Project documentation
 ```
 
+## Training and evaluation notebooks
+
+The following Jupyter notebooks are available for training and evaluating the autoencoders:
+
+- `mnist_qae_trainer_test.ipynb`: Train and evaluate the quantum autoencoder on the MNIST dataset.
+- `mnist_cae_trainer_test.ipynb`: Train and evaluate the classical autoencoder on the MNIST dataset.
+- `fashion_mnist_qae_trainer_test.ipynb`: Train and evaluate the quantum autoencoder on the Fashion MNIST dataset.
+- `fashion_mnist_cae_trainer_test.ipynb`: Train and evaluate the classical autoencoder on the Fashion MNIST dataset.
+
 ## Interactive Gradio Demo
 
 This project includes an interactive web interface built with Gradio for exploring quantum autoencoder results on MNIST digits (0s and 1s).
