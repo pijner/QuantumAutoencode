@@ -1,29 +1,45 @@
+"""Quantum data encoding utilities.
+
+This module provides functions for encoding classical data into quantum states
+using amplitude encoding, which maps classical data to quantum amplitudes.
+"""
+
+from typing import Tuple
+
 import numpy as np
+from numpy.typing import NDArray
 from qiskit import QuantumCircuit
 from qiskit.circuit.library import StatePreparation
 
 
-def amplitude_encode(data: np.ndarray, num_qubits: int) -> tuple[np.ndarray, int]:
+def amplitude_encode(data: NDArray, num_qubits: int) -> Tuple[NDArray, int]:
     """Encode classical data into a quantum state using amplitude encoding.
+
+    Normalizes the input data to unit vector and converts it to complex
+    amplitudes suitable for quantum state preparation. Handles zero-norm
+    inputs by returning the |0...0⟩ state.
 
     Parameters
     ----------
-    data : np.ndarray
-        The input classical data to be encoded.
+    data : NDArray
+        The input classical data to be encoded (1D array)
     num_qubits : int
-        The number of qubits to use for encoding.
+        The number of qubits to use for encoding
 
     Returns
     -------
-    tuple[np.ndarray, int]
-        A tuple containing the encoded quantum state and a flag indicating
-        whether the input data was all zeros (1) or not (0).
+    Tuple[NDArray, int]
+        A tuple containing:
+        - state : NDArray
+            Encoded quantum state as complex amplitudes
+        - flag : int
+            Flag indicating whether input was all zeros (1) or not (0)
 
     Raises
     ------
     ValueError
         If the input data is not a 1D array or if its length exceeds the
-        maximum length for the given number of qubits.
+        maximum length for the given number of qubits
     """
     if data.ndim != 1:
         raise ValueError("Input data must be a 1D array.")
@@ -49,8 +65,12 @@ def amplitude_encode(data: np.ndarray, num_qubits: int) -> tuple[np.ndarray, int
     return state, flag
 
 
-def prepare_amplitude_encoding_circuit(data: np.ndarray, num_qubits: int) -> QuantumCircuit:
+def prepare_amplitude_encoding_circuit(data: NDArray, num_qubits: int) -> QuantumCircuit:
     """Prepare a quantum circuit for amplitude encoding of classical data.
+
+    Creates a quantum circuit that encodes classical data into quantum amplitudes
+    using StatePreparation. An additional flag qubit indicates whether the input
+    was all zeros.
 
     The last qubit acts as a flag qubit:
       - |1⟩ if the input data was all zeros
@@ -58,15 +78,16 @@ def prepare_amplitude_encoding_circuit(data: np.ndarray, num_qubits: int) -> Qua
 
     Parameters
     ----------
-    data : np.ndarray
-        input data in 1D array format
+    data : NDArray
+        Input data in 1D array format
     num_qubits : int
-        number of qubits to use for encoding
+        Number of qubits to use for encoding (excluding the flag qubit)
 
     Returns
     -------
     QuantumCircuit
-        A quantum circuit for amplitude encoding of the input data.
+        A quantum circuit with num_qubits + 1 qubits for amplitude encoding
+        of the input data
     """
     state, flag = amplitude_encode(data, num_qubits)
     qc = QuantumCircuit(num_qubits + 1, name="AmplitudeEncode")
